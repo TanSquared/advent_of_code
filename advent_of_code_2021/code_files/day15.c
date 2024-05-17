@@ -1,26 +1,24 @@
 //One key thing to note is that we can also move left and up along with right and down
-//I use A* algorithm here
+//I use A* algorithm here. It takes less than a sec for Part1 and about 14 min for Part2 in my PC
 #include "header.h"
-
-int** part1graph = NULL;
+int** graph = NULL;
 int row, column;
-//I am not going to solve for part2, as I fear for my computer
-//I will just evaluate the graph, so if I want I can just run analyze() on it
-int** part2graph = NULL;
 
-//We don't really need the prev pointer, but it was helpful for debugging so I'm keeping it
 typedef struct indexNode{
   long unsigned int total;
   int row;
   int column;
   struct indexNode *next;
-  struct indexNode *prev;
 } indexNode;
 
-indexNode* indexPath = NULL;
+//Store list of nodes to evaluate in a min heap for indexPath
+indexNode **indexPath, **visitedPaths  = NULL;
+int size, lastIndex, visited;
 
-void fileReadandCreateRule(char *filePath){
+int fileReadandCreateRule(char *filePath){
   int fd = open(filePath, O_RDONLY);
+  if (fd < 0) return 0;
+
   char* buf = (char*)malloc(sizeof(char));;
   int seek, i;
 
@@ -32,9 +30,9 @@ void fileReadandCreateRule(char *filePath){
   }
   column = column - 1;
   row = column;
-  part1graph = calloc(row, sizeof(int*));
+  graph = calloc(row, sizeof(int*));
   for(i = 0; i < row; i++)
-    part1graph[i] = calloc(column, sizeof(int));
+    graph[i] = calloc(column, sizeof(int));
 
   //Now that we know row and column value, we set the counter back to start of file
   lseek(fd, 0, SEEK_SET);
@@ -43,38 +41,14 @@ void fileReadandCreateRule(char *filePath){
   int current_column = 0;
   while ( (seek = read(fd, buf, 1)) > 0){
     while(strncmp(buf, "\n", 1) != 0){
-      part1graph[current_row][current_column++] = atoi(buf);
+      graph[current_row][current_column++] = atoi(buf);
       seek = read(fd, buf, 1);
     }
     current_row++;
     current_column = 0;
   }
 
-  //Now we fill part2graph
-  int j, k;
-  part2graph = calloc(5 * row, sizeof(int*));
-  for(i = 0; i < 5 * row; i++)
-    part2graph[i] = calloc(5 * column, sizeof(int));
-  for(i = 0; i < row; i++){
-    for(j = 0; j < column; j++)
-      part2graph[i][j] = part1graph[i][j];
-  }
-  i = 0;
-  j = 0;
-  for(k = 1; k < 5; k++){
-    for(i = 0; i < row; i++){
-      for(j = (k - 1) * column; j < k * column; j++)
-        part2graph[i][j + column] = (part2graph[i][j]) % 9 + 1;
-    }
-  }
-
-  for(k = 1; k < 5; k++){
-    for(i = (k -1) * row; i < k * row; i++){
-      for(j = 0; j < 5 * column; j++)
-        part2graph[i + row][j] = (part2graph[i][j]) % 9 + 1;
-    }
-  }
-
+  return 1;
 }
 
 indexNode* createIndex(int x, int y, long unsigned int total){
@@ -85,111 +59,125 @@ indexNode* createIndex(int x, int y, long unsigned int total){
   return temp;
 }
 
-void printIndexPath(){
-  indexNode* debug = indexPath;
-  printf("{");
-  while(debug){
-    printf("[(%d, %d) -> %lu], ", debug -> row, debug -> column, debug -> total);
-    debug = debug -> next;
-  }
-  printf("}\n");
+void swap(int a, int b){
+  indexNode *c = *(indexPath + a);
+  *(indexPath + a) = *(indexPath + b);
+  *(indexPath + b) = c;
 }
 
-indexNode* insertIndex(indexNode* nodeToInsert){
-  if (nodeToInsert == NULL) return indexPath;
-  if (indexPath == NULL) return nodeToInsert;
-
-  if (indexPath -> total >= nodeToInsert -> total){
-    nodeToInsert -> next = indexPath;
-    return nodeToInsert;
+void heapifyUp(int index){
+  if (index == 0) return;
+  int parent = (index - 1)/2;
+  if (indexPath[parent] -> total > indexPath[index] -> total){
+    swap(parent, index);
+    heapifyUp(parent);
   }
+}
 
-  indexNode *temp, *saki;
-  temp = indexPath;
-  saki = NULL;
-
-  //For the case if we find an indentical node with different total
-  while(temp != NULL){
-    if (temp -> row == nodeToInsert -> row && temp -> column == nodeToInsert -> column){
-      if (temp -> total > nodeToInsert -> total){
-        nodeToInsert -> next = temp -> next;
-        if (saki) saki -> next = nodeToInsert;
-      }
-      return indexPath;
-    }
-    saki = temp;
-    temp = temp -> next;
+void heapifyDown(int index){
+  int leftChild = 2 * index + 1;
+  int rightChild = 2 * index + 2;
+  int smallest = index;
+  if ( (leftChild < lastIndex) && (indexPath[leftChild] -> total < indexPath[index] -> total) )
+    smallest = leftChild;
+  if ( (rightChild < lastIndex) && (indexPath[rightChild] -> total < indexPath[smallest] -> total) )
+    smallest = rightChild;
+  if (smallest != index){
+    swap(smallest, index);
+    heapifyDown(smallest);
   }
+}
 
-  temp = indexPath;
-  while( (temp != NULL) && (temp -> total < nodeToInsert -> total) ){
-    saki = temp;
-    temp = temp -> next;
+indexNode** insertIndex(indexNode* nodeToInsert){
+  indexPath[lastIndex] = nodeToInsert;
+  heapifyUp(lastIndex);
+  lastIndex++;
+  if (lastIndex == size){
+    size = size * 2;
+    indexPath = realloc(indexPath, size * sizeof(indexNode*));
   }
-
-  nodeToInsert -> next = temp;
-  saki -> next = nodeToInsert;
-
   return indexPath;
 }
 
-//long unsigned int analyze(){
-indexNode* analyze(int** graph){
-  indexPath = createIndex(0, 0, 0);
+int alreadyVisited(int current_row, int current_column){
+  for(int i = 0; i < visited; i++){
+    if (visitedPaths[i] -> row == current_row && visitedPaths[i] -> column == current_column)
+      return 1;
+  }
+  return 0;
+}
 
-  while(indexPath != NULL){
-    indexNode* temp = indexPath;
-    indexPath = indexPath -> next;
+indexNode* analyze(int factor){
+  lastIndex = 0;
+  visited = 0;
+  int bigRow = row * factor;
+  int bigColumn = column * factor;
+  //Assuming that this much size would be nearly enough
+  //Anyways, if it's not we'll realloc
+  size = bigRow * bigColumn;
+  indexPath = calloc(size, sizeof(indexNode*));
+  visitedPaths = calloc(size, sizeof(indexNode*));
+  indexPath = insertIndex(createIndex(0, 0, 0));
+
+  int newRow, newColumn;
+  indexNode* temp;
+  long unsigned int cycles = 0;
+  while(lastIndex){
+    cycles++;
+
+    temp = indexPath[0];
+    
+    if (temp -> row == bigRow - 1 && temp -> column == bigColumn - 1) return temp;
 
     int current_row = temp -> row;
     int current_column = temp -> column;
-    int nextRow = current_row + 1;
-    int nextColumn = current_column + 1;
-    int prevRow = current_row - 1;
-    int prevColumn = current_column - 1;
-    indexNode *rightChild = NULL, *downChild = NULL, *upChild = NULL, *leftChild = NULL;
-
-    if (nextRow < row){
-      downChild = createIndex(nextRow, current_column, temp -> total + graph[nextRow][current_column]);
-      downChild -> prev = temp;
-      if ( (downChild -> row == row - 1) && (downChild -> column == column - 1) )
-        return downChild;
+    long unsigned int total = temp -> total;
+    int newTotal, baseRow, baseColumn;
+    int repeat, skip;
+    for(int i = -1; i < 2; i++){
+      for(int j = -1; j < 2; j++){
+        if (abs(i) == abs(j)) continue;
+        newRow = current_row + i;
+        newColumn = current_column + j;
+        if ( (newRow >= 0 && newColumn >= 0) && (newRow < bigRow && newColumn < bigColumn) && (alreadyVisited(newRow, newColumn) == 0) ){
+          skip = 0;
+          repeat = newRow/row + newColumn/column;
+          baseRow = newRow % row;
+          baseColumn = newColumn % column;
+          newTotal = (graph[baseRow][baseColumn] + repeat - 1) % 9 + 1;
+          for(int k = 0; k < lastIndex; k++){
+            if (indexPath[k] -> row == newRow && indexPath[k] -> column == newColumn){
+              if (indexPath[k] -> total > total + newTotal)
+                indexPath[k] -> total = total + newTotal;
+              skip = 1;
+            }
+          }
+          if (skip) continue;
+          indexNode* newNode = createIndex(newRow, newColumn, total + newTotal);
+          indexPath = insertIndex(newNode);
+        }
+      }
     }
-    if (prevRow >= 0){
-      upChild = createIndex(prevRow, current_column, temp -> total + graph[prevRow][current_column]);
-      upChild -> prev = temp;
-      if ( (upChild -> row == row - 1) && (upChild -> column == column - 1) )
-        return upChild;
-    }
-    if (nextColumn < column){
-      rightChild = createIndex(current_row, nextColumn, temp -> total + graph[current_row][nextColumn]);
-      rightChild -> prev = temp;
-      if ( (rightChild -> row == row - 1) && (rightChild -> column == column - 1) )
-        return rightChild;
-    }
-    if (prevColumn >= 0){
-      leftChild = createIndex(current_row, prevColumn, temp -> total + graph[current_row][prevColumn]);
-      leftChild -> prev = temp;
-      if ( (leftChild -> row == row - 1) && (leftChild -> column == column - 1) )
-        return leftChild;
-    }
-
-    indexPath = insertIndex(downChild);
-    indexPath = insertIndex(upChild);
-    indexPath = insertIndex(rightChild);
-    indexPath = insertIndex(leftChild);
+    lastIndex--;
+    swap(lastIndex, 0);
+    heapifyDown(0);
+    visitedPaths[visited++] = temp;
+    if (cycles % 5000 == 0)
+        printf("Cycles = %lu\n", cycles);
 
   }
 
+  free(indexPath);
+  free(visitedPaths);
   return NULL;
 }
 
 int main(){
-  fileReadandCreateRule("../input_files/day15input.txt");
-  indexNode* result = analyze(part1graph);
-  printf("%lu\n", result -> total);
-  //indexNode* result2 = analyze(part2graph);
-  //printf("%lu\n", result2 -> total);
+  if (fileReadandCreateRule("code/advent_of_code_2021/day15input.txt")){
+    indexNode* resultPart1 = analyze(1);
+    indexNode* resultPart2 = analyze(5);
+    printf("Part1: %lu\nPart2: %lu\n", resultPart1 -> total, resultPart2 -> total);
+  }
 
   return 0;
 }
